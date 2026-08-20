@@ -1,0 +1,18 @@
+{
+  "name": "repertorio-guitarra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm.cmd run build --workspace client && concurrently \"npm.cmd run dev --workspace server\" \"npm.cmd run preview --workspace client -- --host 0.0.0.0 --port 5173\"",
+    "test": "npm.cmd run test --workspaces --if-present",
+    "build": "npm.cmd run build --workspace client"
+  },
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

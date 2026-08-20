@@ -1,0 +1,32 @@
+# Dependencies and caches
+node_modules/
+.npm-cache/
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Frontend build
+client/dist/
+
+# Local databases
+server/*.sqlite
+server/*.sqlite-*
+
+# Android generated and local files
+android/.gradle/
+android/.idea/
+android/local.properties
+android/app/build/
+android/app/src/main/assets/public/
+android/*.jks
+android/*.keystore
+*.apk
+
+# Editor and operating system
+.vscode/
+.DS_Store
+Thumbs.db
+
