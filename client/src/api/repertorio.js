@@ -1,203 +1,162 @@
+import { supabase } from "../lib/supabaseClient.js";
+
 const DB_NAME = "mi-repertorio";
 const DB_VERSION = 1;
 const SONGS_STORE = "canciones";
 const SETTINGS_STORE = "ajustes";
 const LEGACY_STORE = "mi-repertorio-phone-v1";
+const DEVICE_KEY = "mi-repertorio-device-id";
 
 let databasePromise;
 let writeQueue = Promise.resolve();
 
+export async function migrateLocalData(userId) {
+  const db = await openDatabase();
+  const migrationKey = `supabaseMigrated:${userId}`;
+  const migrated = await getLocalSetting(db, migrationKey);
+  if (migrated?.value) return { imported: 0 };
+
+  const [localSongs, localProfile, cloudSongs] = await Promise.all([
+    allLocalSongs(db),
+    getLocalSetting(db, "profileImage"),
+    fetchCloudSongs(),
+  ]);
+  const knownSongs = new Set(cloudSongs.map(songFingerprint));
+  const deviceId = getDeviceId();
+  const missingSongs = localSongs.filter((song) => !knownSongs.has(songFingerprint(song)));
+
+  if (missingSongs.length) {
+    const rows = missingSongs.map((song, index) => ({
+      ...toDatabaseSong(normalize(song, song)),
+      user_id: userId,
+      origen_local_id: `${deviceId}:${song.id ?? index}`,
+    }));
+    const { error } = await supabase.from("canciones").upsert(rows, {
+      onConflict: "user_id,origen_local_id",
+      ignoreDuplicates: true,
+    });
+    if (error) throw dataError(error);
+  }
+
+  if (localProfile?.value) {
+    const { data: profile } = await supabase
+      .from("ajustes")
+      .select("valor")
+      .eq("clave", "profileImage")
+      .maybeSingle();
+    if (!profile?.valor) await updateProfile(localProfile.value);
+  }
+
+  await setLocalSetting(db, migrationKey, true);
+  return { imported: missingSongs.length };
+}
+
 export async function getSongs() {
-  return localSongs("dominada");
+  return fetchCloudSongs().then((songs) => songs.filter((song) => song.estado === "dominada"));
 }
 
 export async function createSong(payload) {
-  return enqueueWrite(() => localCreate(payload));
+  return enqueueWrite(async () => {
+    const user = await requireUser();
+    const order = await nextCloudOrder();
+    const song = normalize(payload, { orden: order, fecha_creado: new Date().toISOString() });
+    const { data, error } = await supabase
+      .from("canciones")
+      .insert({ ...toDatabaseSong(song), user_id: user.id })
+      .select()
+      .single();
+    if (error) throw dataError(error);
+    return fromDatabaseSong(data);
+  });
 }
 
 export async function updateSong(id, payload) {
-  return enqueueWrite(() => localUpdate(id, payload));
+  return enqueueWrite(async () => {
+    const { data: current, error: readError } = await supabase.from("canciones").select("*").eq("id", id).single();
+    if (readError) throw dataError(readError);
+    const existing = fromDatabaseSong(current);
+    const song = normalize({ ...existing, ...payload }, existing);
+    const { data, error } = await supabase
+      .from("canciones")
+      .update({ ...toDatabaseSong(song), updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw dataError(error);
+    return fromDatabaseSong(data);
+  });
 }
 
 export async function deleteSong(id) {
-  return enqueueWrite(() => localDelete(id));
+  return enqueueWrite(async () => {
+    const { error } = await supabase.from("canciones").delete().eq("id", id);
+    if (error) throw dataError(error);
+    return null;
+  });
 }
 
 export async function reorderSongs(ids) {
-  return enqueueWrite(() => localReorder(ids));
+  return enqueueWrite(async () => {
+    const results = await Promise.all(ids.map((id, orden) => (
+      supabase.from("canciones").update({ orden, updated_at: new Date().toISOString() }).eq("id", id)
+    )));
+    const failed = results.find((result) => result.error);
+    if (failed?.error) throw dataError(failed.error);
+    return { ids };
+  });
 }
 
 export async function getWishlist() {
-  return localSongs("wishlist").then((songs) => songs.map(wishlistItem));
-}
-
-export async function createWishlistItem(payload) {
-  return enqueueWrite(() => localCreate({ ...payload, notas: payload.nota || "", estado: "wishlist" }).then(wishlistItem));
-}
-
-export async function updateWishlistItem(id, payload) {
-  return enqueueWrite(() => localUpdate(id, { ...payload, notas: payload.nota, estado: "wishlist" }).then(wishlistItem));
-}
-
-export async function deleteWishlistItem(id) {
-  return enqueueWrite(() => localDelete(id));
+  return fetchCloudSongs().then((songs) => songs.filter((song) => song.estado === "wishlist").map(wishlistItem));
 }
 
 export async function getProfile() {
-  const db = await openDatabase();
-  const setting = await readRequest(db.transaction(SETTINGS_STORE).objectStore(SETTINGS_STORE).get("profileImage"));
-  return { imagen: String(setting?.value || "") };
+  const { data, error } = await supabase.from("ajustes").select("valor").eq("clave", "profileImage").maybeSingle();
+  if (error) throw dataError(error);
+  return { imagen: String(data?.valor || "") };
 }
 
 export async function updateProfile(imagen) {
   return enqueueWrite(async () => {
+    const user = await requireUser();
     const value = String(imagen || "");
-    const db = await openDatabase();
-    const transaction = db.transaction(SETTINGS_STORE, "readwrite");
-    transaction.objectStore(SETTINGS_STORE).put({ key: "profileImage", value });
-    await transactionDone(transaction);
+    const { error } = await supabase.from("ajustes").upsert({
+      user_id: user.id,
+      clave: "profileImage",
+      valor: value,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id,clave" });
+    if (error) throw dataError(error);
     return { imagen: value };
   });
 }
 
-async function localSongs(state) {
-  const songs = await allSongs();
-  return songs
-    .filter((song) => song.estado === state)
-    .sort((a, b) => Number(a.orden) - Number(b.orden) || Number(a.id) - Number(b.id));
+async function fetchCloudSongs() {
+  const { data, error } = await supabase
+    .from("canciones")
+    .select("*")
+    .order("orden", { ascending: true })
+    .order("fecha_creado", { ascending: true });
+  if (error) throw dataError(error);
+  return (data || []).map(fromDatabaseSong);
 }
 
-async function localCreate(payload) {
-  const db = await openDatabase();
-  const existing = await allSongs(db);
-  const song = normalize(payload, {
-    orden: nextOrder(existing),
-    fecha_creado: new Date().toISOString(),
-  });
-  const transaction = db.transaction(SONGS_STORE, "readwrite");
-  const id = await readRequest(transaction.objectStore(SONGS_STORE).add(song));
-  await transactionDone(transaction);
-  return { ...song, id };
+async function nextCloudOrder() {
+  const { data, error } = await supabase.from("canciones").select("orden").order("orden", { ascending: false }).limit(1).maybeSingle();
+  if (error) throw dataError(error);
+  return Number(data?.orden ?? -1) + 1;
 }
 
-async function localUpdate(id, payload) {
-  const numericId = Number(id);
-  const db = await openDatabase();
-  const transaction = db.transaction(SONGS_STORE, "readwrite");
-  const store = transaction.objectStore(SONGS_STORE);
-  const current = await readRequest(store.get(numericId));
-  if (!current) {
-    transaction.abort();
-    throw new Error("Cancion no encontrada.");
-  }
-  const song = normalize({ ...current, ...payload }, current);
-  store.put(song);
-  await transactionDone(transaction);
-  return song;
-}
-
-async function localDelete(id) {
-  const db = await openDatabase();
-  const transaction = db.transaction(SONGS_STORE, "readwrite");
-  transaction.objectStore(SONGS_STORE).delete(Number(id));
-  await transactionDone(transaction);
-  return null;
-}
-
-async function localReorder(ids) {
-  const positions = new Map(ids.map((id, index) => [Number(id), index]));
-  const db = await openDatabase();
-  const transaction = db.transaction(SONGS_STORE, "readwrite");
-  const store = transaction.objectStore(SONGS_STORE);
-  const songs = await readRequest(store.getAll());
-  songs.forEach((song) => {
-    const position = positions.get(Number(song.id));
-    if (position !== undefined) store.put({ ...song, orden: position });
-  });
-  await transactionDone(transaction);
-  return { ids };
-}
-
-async function allSongs(database) {
-  const db = database || await openDatabase();
-  return readRequest(db.transaction(SONGS_STORE).objectStore(SONGS_STORE).getAll());
-}
-
-async function openDatabase() {
-  if (!databasePromise) {
-    databasePromise = new Promise((resolve, reject) => {
-      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(SONGS_STORE)) {
-          db.createObjectStore(SONGS_STORE, { keyPath: "id", autoIncrement: true });
-        }
-        if (!db.objectStoreNames.contains(SETTINGS_STORE)) {
-          db.createObjectStore(SETTINGS_STORE, { keyPath: "key" });
-        }
-      };
-      request.onerror = () => reject(request.error || new Error("No se pudo abrir la base de datos local."));
-      request.onblocked = () => reject(new Error("La base de datos local esta bloqueada por otra ventana."));
-      request.onsuccess = async () => {
-        const db = request.result;
-        db.onversionchange = () => db.close();
-        try {
-          await migrateLegacyData(db);
-          resolve(db);
-        } catch (error) {
-          db.close();
-          databasePromise = undefined;
-          reject(error);
-        }
-      };
-    });
-  }
-  return databasePromise;
-}
-
-async function migrateLegacyData(db) {
-  const migrated = await readRequest(db.transaction(SETTINGS_STORE).objectStore(SETTINGS_STORE).get("legacyMigrated"));
-  if (migrated?.value) return;
-
-  let legacy = null;
-  try {
-    legacy = JSON.parse(window.localStorage.getItem(LEGACY_STORE) || "null");
-  } catch {
-    legacy = null;
-  }
-
-  const transaction = db.transaction([SONGS_STORE, SETTINGS_STORE], "readwrite");
-  const songsStore = transaction.objectStore(SONGS_STORE);
-  const settingsStore = transaction.objectStore(SETTINGS_STORE);
-  if (Array.isArray(legacy?.songs)) {
-    legacy.songs.forEach((song) => songsStore.put(normalize(song, song)));
-  }
-  if (legacy?.profileImage) {
-    settingsStore.put({ key: "profileImage", value: String(legacy.profileImage) });
-  }
-  settingsStore.put({ key: "legacyMigrated", value: true });
-  await transactionDone(transaction);
+async function requireUser() {
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) throw new Error("Inicia sesion para sincronizar tu repertorio.");
+  return data.user;
 }
 
 function enqueueWrite(operation) {
   const result = writeQueue.then(operation, operation);
   writeQueue = result.catch(() => undefined);
   return result;
-}
-
-function readRequest(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Error al leer la base de datos local."));
-  });
-}
-
-function transactionDone(transaction) {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error || new Error("Error al guardar en la base de datos local."));
-    transaction.onabort = () => reject(transaction.error || new Error("La operacion local fue cancelada."));
-  });
 }
 
 function normalize(payload, defaults = {}) {
@@ -219,18 +178,118 @@ function normalize(payload, defaults = {}) {
     categorias: Array.isArray(payload.categorias) ? payload.categorias : [],
     tecnica: payload.tecnica || "Rasgueo",
     imagen: String(payload.imagen || ""),
-    orden: Number(defaults.orden) || 0,
-    fecha_creado: defaults.fecha_creado || new Date().toISOString(),
+    orden: Number(payload.orden ?? defaults.orden) || 0,
+    fecha_creado: payload.fecha_creado || defaults.fecha_creado || new Date().toISOString(),
   };
-  if (defaults.id != null) song.id = Number(defaults.id);
+  if (defaults.id != null || payload.id != null) song.id = String(payload.id ?? defaults.id);
   return song;
+}
+
+function toDatabaseSong(song) {
+  return {
+    nombre: song.nombre,
+    artista: song.artista,
+    tono: song.tono,
+    tono_original: song.tono_original,
+    tiene_capo: song.tiene_capo,
+    traste_capo: song.traste_capo,
+    me_la_se: song.me_la_se,
+    notas: song.notas,
+    favorito: song.favorito,
+    es_wishlist: song.es_wishlist,
+    estado: song.estado,
+    categorias: song.categorias,
+    tecnica: song.tecnica,
+    imagen: song.imagen,
+    orden: song.orden,
+    fecha_creado: song.fecha_creado,
+  };
+}
+
+function fromDatabaseSong(row) {
+  return { ...normalize(row, row), id: String(row.id), updated_at: row.updated_at };
 }
 
 function wishlistItem(song) {
   return { ...song, nota: song.notas, es_wishlist: true, estado: "wishlist" };
 }
 
-function nextOrder(songs) {
-  return songs.reduce((max, song) => Math.max(max, Number(song.orden) || 0), -1) + 1;
+function songFingerprint(song) {
+  return `${String(song.nombre || "").trim().toLocaleLowerCase()}::${String(song.artista || "").trim().toLocaleLowerCase()}`;
 }
 
+function dataError(error) {
+  if (error?.code === "23505") return new Error("Esa cancion ya fue sincronizada.");
+  return new Error(error?.message || "No se pudo sincronizar con Supabase.");
+}
+
+function getDeviceId() {
+  let id = window.localStorage.getItem(DEVICE_KEY);
+  if (!id) {
+    id = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    window.localStorage.setItem(DEVICE_KEY, id);
+  }
+  return id;
+}
+
+async function openDatabase() {
+  if (!databasePromise) {
+    databasePromise = new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(SONGS_STORE)) db.createObjectStore(SONGS_STORE, { keyPath: "id", autoIncrement: true });
+        if (!db.objectStoreNames.contains(SETTINGS_STORE)) db.createObjectStore(SETTINGS_STORE, { keyPath: "key" });
+      };
+      request.onerror = () => reject(request.error || new Error("No se pudo abrir la base de datos local."));
+      request.onsuccess = async () => {
+        const db = request.result;
+        db.onversionchange = () => db.close();
+        await migrateLegacyData(db);
+        resolve(db);
+      };
+    });
+  }
+  return databasePromise;
+}
+
+async function migrateLegacyData(db) {
+  const migrated = await getLocalSetting(db, "legacyMigrated");
+  if (migrated?.value) return;
+  let legacy = null;
+  try { legacy = JSON.parse(window.localStorage.getItem(LEGACY_STORE) || "null"); } catch { legacy = null; }
+  const transaction = db.transaction([SONGS_STORE, SETTINGS_STORE], "readwrite");
+  if (Array.isArray(legacy?.songs)) legacy.songs.forEach((song) => transaction.objectStore(SONGS_STORE).put(normalize(song, song)));
+  if (legacy?.profileImage) transaction.objectStore(SETTINGS_STORE).put({ key: "profileImage", value: String(legacy.profileImage) });
+  transaction.objectStore(SETTINGS_STORE).put({ key: "legacyMigrated", value: true });
+  await transactionDone(transaction);
+}
+
+async function allLocalSongs(db) {
+  return readRequest(db.transaction(SONGS_STORE).objectStore(SONGS_STORE).getAll());
+}
+
+async function getLocalSetting(db, key) {
+  return readRequest(db.transaction(SETTINGS_STORE).objectStore(SETTINGS_STORE).get(key));
+}
+
+async function setLocalSetting(db, key, value) {
+  const transaction = db.transaction(SETTINGS_STORE, "readwrite");
+  transaction.objectStore(SETTINGS_STORE).put({ key, value });
+  return transactionDone(transaction);
+}
+
+function readRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Error al leer la base de datos local."));
+  });
+}
+
+function transactionDone(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("Error al guardar en la base de datos local."));
+    transaction.onabort = () => reject(transaction.error || new Error("La operacion local fue cancelada."));
+  });
+}

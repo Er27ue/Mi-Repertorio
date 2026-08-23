@@ -1,45 +1,31 @@
-# Repertorio de Guitarra
+# Mi Repertorio
 
-App web personal para guardar canciones de guitarra por secciones, con persistencia real en SQLite.
+Libreta musical personal para organizar canciones dominadas, favoritas y por aprender.
 
-## Fase actual
+## Datos y sincronizacion
 
-Fase 1:
+- Supabase Auth identifica al usuario por correo y contrasena.
+- Supabase Postgres guarda canciones y la foto de perfil.
+- Las politicas RLS limitan cada fila a su propietario.
+- Al iniciar sesion por primera vez, los datos anteriores de IndexedDB se importan automaticamente.
+- El backend Express + SQLite se conserva como referencia, pero la app publicada no depende de la computadora.
 
-- CRUD de canciones del repertorio.
-- CRUD de secciones por cancion.
-- Reordenamiento de secciones con botones subir/bajar.
-- Guardado automatico con debounce en campos de texto.
-- Persistencia real en `server/database.sqlite`.
-
-Fase 2 lista para revision:
-
-- Transporte temporal de tono en la vista de cancion.
-- Acordes visibles recalculados sin modificar los datos guardados.
-- Tono actual calculado desde `tono_original`.
-- Indicador de capo con aclaracion: el capo no transforma los acordes mostrados.
-- Tests unitarios de `transponerAcorde` y `transponerLineaDeAcordes`.
-
-Fase 3 lista para revision:
-
-- Checkbox "me la se" funcional en tarjetas de biblioteca y vista de cancion.
-- Filtros "Me las se" y "Por repasar" conectados a datos reales.
-- Wishlist completa: listar, crear y eliminar ideas.
-- Flujo "Empezar a anotar": prellena el modal de cancion, crea repertorio y elimina el item de wishlist.
-- Tests HTTP para checklist y wishlist.
-
-## Correr
+## Desarrollo
 
 ```bash
 npm install
-npm run dev
+npm run dev --workspace client
 ```
 
-Frontend: `http://localhost:5173`
-Backend: `http://localhost:4000`
-
-## Probar
+## Verificacion
 
 ```bash
 npm test
+npm run build
 ```
+
+## Publicacion
+
+Cada push a `main` ejecuta `.github/workflows/deploy-pages.yml` y publica en:
+
+`https://er27ue.github.io/Mi-Repertorio/`

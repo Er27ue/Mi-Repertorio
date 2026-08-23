@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Check, ChevronDown, ClipboardPaste, ImagePlus, MoreHorizontal, Minus, Music2, Plus, RotateCcw, Search, Star, Trash2, Upload, X } from "lucide-react";
+import { Check, ChevronDown, ClipboardPaste, ImagePlus, LogOut, MoreHorizontal, Minus, Music2, Plus, RotateCcw, Search, Star, Trash2, Upload, X } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import {
   createSong,
@@ -8,10 +8,12 @@ import {
   getProfile,
   getSongs,
   getWishlist,
+  migrateLocalData,
   reorderSongs,
   updateProfile,
   updateSong
 } from "./api/repertorio.js";
+import { getCurrentUser, observeAuth, signIn, signOut, signUp } from "./api/auth.js";
 import { searchSongs } from "./api/songSearch.js";
 import { filterSongs } from "./lib/filters.js";
 import "./theme.css";
@@ -63,6 +65,9 @@ const landingColumns = [
 function App() {
   const reduceMotion = useReducedMotion();
   const [showLanding, setShowLanding] = useState(true);
+  const [showAuth, setShowAuth] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState(null);
   const [songs, setSongs] = useState([]);
   const [wishlist, setWishlist] = useState([]);
   const [orderedIds, setOrderedIds] = useState([]);
@@ -79,8 +84,63 @@ function App() {
   const reorderTimer = useRef(null);
 
   useEffect(() => {
-    refresh();
+    let active = true;
+
+    async function loadAccount(currentUser) {
+      if (!currentUser) return;
+      try {
+        await migrateLocalData(currentUser.id);
+        if (active) await refresh();
+      } catch (err) {
+        if (active) setError(err.message);
+      }
+    }
+
+    getCurrentUser()
+      .then((currentUser) => {
+        if (!active) return;
+        setUser(currentUser);
+        setAuthReady(true);
+        return loadAccount(currentUser);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setError(err.message);
+        setAuthReady(true);
+      });
+
+    const stopObserving = observeAuth((currentUser) => {
+      if (!active) return;
+      setUser(currentUser);
+      setAuthReady(true);
+      if (currentUser) {
+        setShowAuth(false);
+        loadAccount(currentUser);
+      } else {
+        setSongs([]);
+        setWishlist([]);
+        setOrderedIds([]);
+      }
+    });
+
+    return () => {
+      active = false;
+      stopObserving();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!user) return undefined;
+    const refreshWhenActive = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    window.addEventListener("focus", refreshWhenActive);
+    document.addEventListener("visibilitychange", refreshWhenActive);
+    return () => {
+      window.removeEventListener("focus", refreshWhenActive);
+      document.removeEventListener("visibilitychange", refreshWhenActive);
+    };
+  }, [user]);
 
   async function refresh() {
     setError("");
@@ -160,6 +220,16 @@ function App() {
     setProfileImage(saved.imagen || "");
   }
 
+  async function leaveAccount() {
+    try {
+      await signOut();
+      setShowLanding(true);
+      setShowAuth(false);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   function handleReorder(nextItems) {
     if (hasActiveFilters) return;
     const movableIds = new Set(tabItems.map((item) => item.id));
@@ -192,6 +262,9 @@ function App() {
         <header className="topbar">
           <ProfileImageButton value={profileImage} onChange={saveProfileImage} />
           <h1>Mi Repertorio</h1>
+          <button className="account-button" type="button" onClick={leaveAccount} title="Cerrar sesion">
+            <LogOut size={18} />
+          </button>
         </header>
 
         <section className="hero-strip">
@@ -260,7 +333,19 @@ function App() {
         {showLanding ? (
           <LandingScreen
             key="landing-screen"
-            onEnter={() => setShowLanding(false)}
+            onEnter={() => {
+              if (!authReady) return;
+              setShowLanding(false);
+              setShowAuth(!user);
+            }}
+            reduceMotion={reduceMotion}
+          />
+        ) : null}
+        {showAuth && !user ? (
+          <AuthScreen
+            key="auth-screen"
+            onSignIn={signIn}
+            onSignUp={signUp}
             reduceMotion={reduceMotion}
           />
         ) : null}
@@ -281,6 +366,86 @@ function App() {
         ) : null}
       </AnimatePresence>
     </main>
+  );
+}
+
+function AuthScreen({ onSignIn, onSignUp, reduceMotion }) {
+  const [mode, setMode] = useState("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [authError, setAuthError] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    setLoading(true);
+    setMessage("");
+    setAuthError("");
+    try {
+      if (mode === "signup") {
+        const result = await onSignUp(email.trim(), password);
+        if (result.needsConfirmation) {
+          setMessage("Revisa tu correo y confirma la cuenta. Después vuelve aquí y pulsa Entrar.");
+          setMode("signin");
+        }
+      } else {
+        await onSignIn(email.trim(), password);
+      }
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <motion.section
+      className="auth-screen"
+      initial={reduceMotion ? { opacity: 1 } : { opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <motion.div
+        className="auth-panel"
+        initial={reduceMotion ? false : { opacity: 0, y: 18 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.36, ease: "easeOut" }}
+      >
+        <span className="auth-mark"><Music2 size={30} /></span>
+        <p className="auth-kicker">Sincronización privada</p>
+        <h2>{mode === "signup" ? "Crea tu cuenta" : "Entra a tu repertorio"}</h2>
+        <p className="auth-intro">Usa la misma cuenta en el celular y la computadora para compartir todas tus canciones.</p>
+
+        <form className="auth-form" onSubmit={submit}>
+          <label>
+            <span>Correo</span>
+            <input type="email" inputMode="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+          </label>
+          <label>
+            <span>Contraseña</span>
+            <input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength="6" value={password} onChange={(event) => setPassword(event.target.value)} required />
+          </label>
+          {authError ? <p className="auth-error">{authError}</p> : null}
+          {message ? <p className="auth-message">{message}</p> : null}
+          <motion.button className="auth-submit" whileTap={reduceMotion ? undefined : press} disabled={loading}>
+            {loading ? "Conectando..." : mode === "signup" ? "Crear cuenta" : "Entrar"}
+          </motion.button>
+        </form>
+
+        <button
+          type="button"
+          className="auth-mode"
+          onClick={() => {
+            setMode((current) => current === "signin" ? "signup" : "signin");
+            setAuthError("");
+            setMessage("");
+          }}
+        >
+          {mode === "signup" ? "Ya tengo cuenta" : "Crear mi cuenta"}
+        </button>
+      </motion.div>
+    </motion.section>
   );
 }
 
