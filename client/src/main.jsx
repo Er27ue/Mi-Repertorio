@@ -13,7 +13,7 @@ import {
   updateProfile,
   updateSong
 } from "./api/repertorio.js";
-import { getCurrentUser, observeAuth, signIn, signOut, signUp } from "./api/auth.js";
+import { getCurrentUser, observeAuth, signIn, signInWithGoogle, signOut, signUp } from "./api/auth.js";
 import { searchSongs } from "./api/songSearch.js";
 import { filterSongs } from "./lib/filters.js";
 import "./theme.css";
@@ -346,6 +346,7 @@ function App() {
             key="auth-screen"
             onSignIn={signIn}
             onSignUp={signUp}
+            onGoogle={signInWithGoogle}
             reduceMotion={reduceMotion}
           />
         ) : null}
@@ -369,8 +370,9 @@ function App() {
   );
 }
 
-function AuthScreen({ onSignIn, onSignUp, reduceMotion }) {
+function AuthScreen({ onSignIn, onSignUp, onGoogle, reduceMotion }) {
   const [mode, setMode] = useState("signin");
+  const [showEmail, setShowEmail] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -399,6 +401,18 @@ function AuthScreen({ onSignIn, onSignUp, reduceMotion }) {
     }
   }
 
+  async function continueWithGoogle() {
+    setLoading(true);
+    setMessage("");
+    setAuthError("");
+    try {
+      await onGoogle();
+    } catch (err) {
+      setAuthError(err.message);
+      setLoading(false);
+    }
+  }
+
   return (
     <motion.section
       className="auth-screen"
@@ -413,37 +427,65 @@ function AuthScreen({ onSignIn, onSignUp, reduceMotion }) {
         transition={{ duration: 0.36, ease: "easeOut" }}
       >
         <span className="auth-mark"><Music2 size={30} /></span>
-        <p className="auth-kicker">Sincronización privada</p>
-        <h2>{mode === "signup" ? "Crea tu cuenta" : "Entra a tu repertorio"}</h2>
-        <p className="auth-intro">Usa la misma cuenta en el celular y la computadora para compartir todas tus canciones.</p>
+        <p className="auth-kicker">Tu repertorio, en todas partes</p>
+        <h2>Continuar</h2>
+        <p className="auth-intro">Entra una vez y tus canciones se mantendrán sincronizadas entre el celular y la computadora.</p>
 
-        <form className="auth-form" onSubmit={submit}>
-          <label>
-            <span>Correo</span>
-            <input type="email" inputMode="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-          </label>
-          <label>
-            <span>Contraseña</span>
-            <input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength="6" value={password} onChange={(event) => setPassword(event.target.value)} required />
-          </label>
-          {authError ? <p className="auth-error">{authError}</p> : null}
-          {message ? <p className="auth-message">{message}</p> : null}
-          <motion.button className="auth-submit" whileTap={reduceMotion ? undefined : press} disabled={loading}>
-            {loading ? "Conectando..." : mode === "signup" ? "Crear cuenta" : "Entrar"}
-          </motion.button>
-        </form>
-
-        <button
+        <motion.button
           type="button"
-          className="auth-mode"
-          onClick={() => {
-            setMode((current) => current === "signin" ? "signup" : "signin");
-            setAuthError("");
-            setMessage("");
-          }}
+          className="google-auth-button"
+          whileTap={reduceMotion ? undefined : press}
+          onClick={continueWithGoogle}
+          disabled={loading}
         >
-          {mode === "signup" ? "Ya tengo cuenta" : "Crear mi cuenta"}
+          <span className="google-mark" aria-hidden="true">G</span>
+          {loading ? "Abriendo Google..." : "Continuar con Google"}
+        </motion.button>
+
+        {authError ? <p className="auth-error auth-feedback">{authError}</p> : null}
+
+        <div className="auth-divider"><span>o</span></div>
+        <button type="button" className="auth-email-toggle" onClick={() => setShowEmail((current) => !current)}>
+          {showEmail ? "Ocultar acceso por correo" : "Usar correo y contraseña"}
         </button>
+
+        <AnimatePresence initial={false}>
+          {showEmail ? (
+            <motion.div
+              className="auth-email-area"
+              initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+            >
+              <form className="auth-form" onSubmit={submit}>
+                <label>
+                  <span>Correo</span>
+                  <input type="email" inputMode="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+                </label>
+                <label>
+                  <span>Contraseña</span>
+                  <input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength="6" value={password} onChange={(event) => setPassword(event.target.value)} required />
+                </label>
+                {message ? <p className="auth-message">{message}</p> : null}
+                <motion.button className="auth-submit" whileTap={reduceMotion ? undefined : press} disabled={loading}>
+                  {loading ? "Conectando..." : mode === "signup" ? "Crear cuenta" : "Entrar"}
+                </motion.button>
+              </form>
+
+              <button
+                type="button"
+                className="auth-mode"
+                onClick={() => {
+                  setMode((current) => current === "signin" ? "signup" : "signin");
+                  setAuthError("");
+                  setMessage("");
+                }}
+              >
+                {mode === "signup" ? "Ya tengo cuenta" : "Crear una cuenta con correo"}
+              </button>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </motion.div>
     </motion.section>
   );

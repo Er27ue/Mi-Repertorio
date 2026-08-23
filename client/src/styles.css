@@ -331,6 +331,77 @@ select:focus-visible {
   line-height: 1.5;
 }
 
+.google-auth-button {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  border: 1px solid var(--color-cool-32);
+  border-radius: 8px;
+  background: var(--violet);
+  color: var(--ink);
+  font-weight: 900;
+  box-shadow: var(--shadow-action);
+}
+
+.google-auth-button:disabled {
+  opacity: 0.66;
+}
+
+.google-mark {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--violet);
+  font-family: Arial, sans-serif;
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 12px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+}
+
+.auth-email-toggle {
+  justify-self: center;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-78);
+  font-size: 0.8rem;
+  font-weight: 850;
+}
+
+.auth-email-area {
+  overflow: hidden;
+}
+
+.auth-email-area .auth-form {
+  padding-top: 18px;
+}
+
+.auth-feedback {
+  margin-top: 12px;
+  text-align: center;
+}
+
 .auth-form,
 .auth-form label {
   display: grid;
@@ -1896,6 +1967,73 @@ h1 {
 }
 
 @media (min-width: 800px) {
+  .landing-screen {
+    align-items: center;
+    padding: 24px;
+  }
+
+  .landing-card {
+    width: min(calc(100vw - 48px), 1180px);
+    min-height: min(calc(100dvh - 48px), 820px);
+    height: calc(100dvh - 48px);
+    border-radius: 22px;
+  }
+
+  .landing-collage {
+    inset: -150px 28px -300px;
+    gap: 12px;
+  }
+
+  .collage-column,
+  .collage-sequence {
+    gap: 12px;
+  }
+
+  .collage-tile {
+    height: 240px;
+    border-radius: 12px;
+  }
+
+  .collage-column-1 .collage-sequence .collage-tile:nth-child(3n + 1),
+  .collage-column-3 .collage-sequence .collage-tile:nth-child(3n + 2) {
+    height: 310px;
+  }
+
+  .collage-column-2 .collage-sequence .collage-tile {
+    height: 278px;
+  }
+
+  .landing-copy {
+    align-items: flex-start;
+    min-height: 72%;
+    padding: 150px 7% 54px;
+  }
+
+  .landing-title {
+    width: min(100%, 720px);
+    min-height: 86px;
+    font-size: 4.7rem;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .landing-verse {
+    width: min(100%, 670px);
+    min-height: 0;
+    margin: 22px 0 28px;
+    font-size: 0.94rem;
+    line-height: 1.55;
+  }
+
+  .landing-actions {
+    width: 320px;
+  }
+
+  .auth-panel {
+    width: min(100%, 440px);
+    padding: 38px 34px 30px;
+  }
+
   .phone-frame {
     width: min(100%, 760px);
     padding: 30px 38px 38px;
