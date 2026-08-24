@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Check, ChevronDown, ClipboardPaste, ImagePlus, LogOut, MoreHorizontal, Minus, Music2, Plus, RotateCcw, Search, Star, Trash2, Upload, X } from "lucide-react";
+import { Check, ChevronDown, ClipboardPaste, Fingerprint, ImagePlus, LogOut, MoreHorizontal, Minus, Music2, Plus, RotateCcw, Search, Star, Trash2, Upload, X } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import {
   createSong,
@@ -13,7 +13,7 @@ import {
   updateProfile,
   updateSong
 } from "./api/repertorio.js";
-import { getCurrentUser, observeAuth, signIn, signInWithGoogle, signOut, signUp } from "./api/auth.js";
+import { getCurrentUser, observeAuth, registerPasskey, signIn, signInWithPasskey, signOut, signUp } from "./api/auth.js";
 import { searchSongs } from "./api/songSearch.js";
 import { filterSongs } from "./lib/filters.js";
 import "./theme.css";
@@ -81,6 +81,8 @@ function App() {
   const [sheet, setSheet] = useState(null);
   const [celebration, setCelebration] = useState(null);
   const [error, setError] = useState("");
+  const [passkeyNotice, setPasskeyNotice] = useState("");
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
   const reorderTimer = useRef(null);
 
   useEffect(() => {
@@ -230,6 +232,19 @@ function App() {
     }
   }
 
+  async function enablePasskey() {
+    setPasskeyLoading(true);
+    setPasskeyNotice("");
+    try {
+      await registerPasskey();
+      setPasskeyNotice("Huella o PIN activados en este dispositivo.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPasskeyLoading(false);
+    }
+  }
+
   function handleReorder(nextItems) {
     if (hasActiveFilters) return;
     const movableIds = new Set(tabItems.map((item) => item.id));
@@ -262,10 +277,15 @@ function App() {
         <header className="topbar">
           <ProfileImageButton value={profileImage} onChange={saveProfileImage} />
           <h1>Mi Repertorio</h1>
-          <button className="account-button" type="button" onClick={leaveAccount} title="Cerrar sesion">
+          <button className="account-button passkey-button" type="button" onClick={enablePasskey} disabled={passkeyLoading} title="Activar huella o PIN" aria-label="Activar huella o PIN">
+            <Fingerprint size={19} />
+          </button>
+          <button className="account-button" type="button" onClick={leaveAccount} title="Cerrar sesion" aria-label="Cerrar sesion">
             <LogOut size={18} />
           </button>
         </header>
+
+        {passkeyNotice ? <p className="passkey-notice">{passkeyNotice}</p> : null}
 
         <section className="hero-strip">
           <div><span>{allItems.filter((item) => item.favorito).length}</span><p>favoritos</p></div>
@@ -346,7 +366,7 @@ function App() {
             key="auth-screen"
             onSignIn={signIn}
             onSignUp={signUp}
-            onGoogle={signInWithGoogle}
+            onPasskey={signInWithPasskey}
             reduceMotion={reduceMotion}
           />
         ) : null}
@@ -370,9 +390,9 @@ function App() {
   );
 }
 
-function AuthScreen({ onSignIn, onSignUp, onGoogle, reduceMotion }) {
+function AuthScreen({ onSignIn, onSignUp, onPasskey, reduceMotion }) {
   const [mode, setMode] = useState("signin");
-  const [showEmail, setShowEmail] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -401,14 +421,15 @@ function AuthScreen({ onSignIn, onSignUp, onGoogle, reduceMotion }) {
     }
   }
 
-  async function continueWithGoogle() {
+  async function usePasskey() {
     setLoading(true);
     setMessage("");
     setAuthError("");
     try {
-      await onGoogle();
+      await onPasskey();
     } catch (err) {
       setAuthError(err.message);
+    } finally {
       setLoading(false);
     }
   }
@@ -431,26 +452,22 @@ function AuthScreen({ onSignIn, onSignUp, onGoogle, reduceMotion }) {
         <h2>Continuar</h2>
         <p className="auth-intro">Entra una vez y tus canciones se mantendrán sincronizadas entre el celular y la computadora.</p>
 
-        <motion.button
-          type="button"
-          className="google-auth-button"
-          whileTap={reduceMotion ? undefined : press}
-          onClick={continueWithGoogle}
-          disabled={loading}
-        >
-          <span className="google-mark" aria-hidden="true">G</span>
-          {loading ? "Abriendo Google..." : "Continuar con Google"}
+        <motion.button type="button" className="passkey-auth-button" whileTap={reduceMotion ? undefined : press} onClick={usePasskey} disabled={loading}>
+          <Fingerprint size={24} />
+          {loading ? "Comprobando..." : "Entrar con huella o PIN"}
         </motion.button>
 
+        <p className="auth-helper">Usa Windows Hello en la computadora o la huella de tu celular.</p>
         {authError ? <p className="auth-error auth-feedback">{authError}</p> : null}
+        {message ? <p className="auth-message auth-feedback">{message}</p> : null}
 
         <div className="auth-divider"><span>o</span></div>
-        <button type="button" className="auth-email-toggle" onClick={() => setShowEmail((current) => !current)}>
-          {showEmail ? "Ocultar acceso por correo" : "Usar correo y contraseña"}
+        <button type="button" className="auth-email-toggle" onClick={() => setShowPassword((current) => !current)}>
+          {showPassword ? "Ocultar acceso alternativo" : "Primera vez o usar contraseña"}
         </button>
 
         <AnimatePresence initial={false}>
-          {showEmail ? (
+          {showPassword ? (
             <motion.div
               className="auth-email-area"
               initial={reduceMotion ? false : { opacity: 0, height: 0 }}
@@ -466,7 +483,6 @@ function AuthScreen({ onSignIn, onSignUp, onGoogle, reduceMotion }) {
                   <span>Contraseña</span>
                   <input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength="6" value={password} onChange={(event) => setPassword(event.target.value)} required />
                 </label>
-                {message ? <p className="auth-message">{message}</p> : null}
                 <motion.button className="auth-submit" whileTap={reduceMotion ? undefined : press} disabled={loading}>
                   {loading ? "Conectando..." : mode === "signup" ? "Crear cuenta" : "Entrar"}
                 </motion.button>
