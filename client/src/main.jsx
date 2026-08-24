@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Check, ChevronDown, ClipboardPaste, ImagePlus, MoreHorizontal, Minus, Music2, Plus, RotateCcw, Search, Star, Trash2, Upload, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardPaste, ImagePlus, MoreHorizontal, Minus, Music2, Plus, RotateCcw, Search, Star, Trash2, Upload, X } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import {
   createSong,
@@ -16,6 +16,7 @@ import {
 } from "./api/repertorio.js";
 import { searchSongs } from "./api/songSearch.js";
 import { filterSongs } from "./lib/filters.js";
+import { clampPage, getPageCount, paginateItems } from "./lib/pagination.js";
 import "./theme.css";
 import "./styles.css";
 
@@ -24,6 +25,7 @@ const spring = {
   soft: { type: "spring", stiffness: 290, damping: 30, mass: 1 }
 };
 const press = { scale: 0.97 };
+const PAGE_SIZE = 10;
 const toneOptions = [
   "Todos",
   "C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Gb", "G", "G#", "Ab", "A", "A#", "Bb", "B",
@@ -69,6 +71,7 @@ function App() {
   const [wishlist, setWishlist] = useState([]);
   const [orderedIds, setOrderedIds] = useState([]);
   const [activeTab, setActiveTab] = useState("dominada");
+  const [pageByTab, setPageByTab] = useState({ favoritos: 1, dominada: 1, wishlist: 1 });
   const [query, setQuery] = useState("");
   const [profileImage, setProfileImage] = useState("");
   const [toneFilter, setToneFilter] = useState("Todos");
@@ -79,6 +82,8 @@ function App() {
   const [celebration, setCelebration] = useState(null);
   const [error, setError] = useState("");
   const reorderTimer = useRef(null);
+  const scrollContainerRef = useRef(null);
+  const listTopRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -130,7 +135,43 @@ function App() {
     () => filterSongs(tabItems, commonFilters),
     [tabItems, query, toneFilter, capoFilter, categoryFilter, techniqueFilter]
   );
+  const totalPages = getPageCount(visibleItems.length, PAGE_SIZE);
+  const currentPage = clampPage(pageByTab[activeTab], totalPages);
+  const pageItems = useMemo(
+    () => paginateItems(visibleItems, currentPage, PAGE_SIZE),
+    [visibleItems, currentPage]
+  );
   const hasActiveFilters = Boolean(query.trim() || toneFilter !== "Todos" || capoFilter !== "Todos" || categoryFilter !== "Todas" || techniqueFilter !== "Todas");
+
+  useEffect(() => {
+    setPageByTab({ favoritos: 1, dominada: 1, wishlist: 1 });
+  }, [query, toneFilter, capoFilter, categoryFilter, techniqueFilter]);
+
+  useEffect(() => {
+    setPageByTab((current) => {
+      const nextPage = clampPage(current[activeTab], totalPages);
+      return nextPage === current[activeTab] ? current : { ...current, [activeTab]: nextPage };
+    });
+  }, [activeTab, totalPages]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => scrollListToTop(reduceMotion ? "auto" : "smooth"));
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, currentPage]);
+
+  function scrollListToTop(behavior = "smooth") {
+    const container = scrollContainerRef.current;
+    const target = listTopRef.current;
+    if (!container || !target) return;
+    const containerTop = container.getBoundingClientRect().top;
+    const targetTop = target.getBoundingClientRect().top;
+    container.scrollTo({ top: Math.max(0, container.scrollTop + targetTop - containerTop - 12), behavior });
+  }
+
+  function changePage(nextPage) {
+    const page = clampPage(nextPage, totalPages);
+    setPageByTab((current) => ({ ...current, [activeTab]: page }));
+  }
 
   async function saveSong(payload, currentItem) {
     const saved = currentItem?.id
@@ -187,7 +228,7 @@ function App() {
 
   function handleReorder(nextItems) {
     if (hasActiveFilters) return;
-    const movableIds = new Set(tabItems.map((item) => item.id));
+    const movableIds = new Set(nextItems.map((item) => item.id));
     let replacementIndex = 0;
     const reordered = allItems.map((item) => (
       movableIds.has(item.id) ? nextItems[replacementIndex++] : item
@@ -212,7 +253,7 @@ function App() {
   }[activeTab];
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" ref={scrollContainerRef}>
       <div className="phone-frame">
         <header className="topbar">
           <ProfileImageButton value={profileImage} onChange={saveProfileImage} />
@@ -254,6 +295,7 @@ function App() {
           <motion.section
             key={activeTab}
             className="notebook-page"
+            ref={listTopRef}
             initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 14 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -10 }}
@@ -266,15 +308,23 @@ function App() {
               reduceMotion={reduceMotion}
             />
             <SongList
-              items={visibleItems}
+              items={pageItems}
               activeTab={activeTab}
               onEdit={(item) => setSheet({ type: "song", item })}
               onToggleFavorite={toggleFavorite}
               onPromote={promoteWishlist}
               onReorder={handleReorder}
-              canReorder={!hasActiveFilters && visibleItems.length > 1}
+              canReorder={!hasActiveFilters && pageItems.length > 1}
               reduceMotion={reduceMotion}
             />
+            {totalPages > 1 ? (
+              <Pagination
+                page={currentPage}
+                totalPages={totalPages}
+                onChange={changePage}
+                reduceMotion={reduceMotion}
+              />
+            ) : null}
             {!tabItems.length ? <EmptyState text={pageCopy.empty} /> : null}
             {tabItems.length > 0 && !visibleItems.length ? <EmptyState text="No hay canciones que coincidan con estos filtros." /> : null}
           </motion.section>
@@ -604,6 +654,34 @@ function SongList({ items, activeTab, onEdit, onToggleFavorite, onPromote, onReo
         ))}
       </AnimatePresence>
     </Reorder.Group>
+  );
+}
+
+function Pagination({ page, totalPages, onChange, reduceMotion }) {
+  return (
+    <nav className="pagination" aria-label="Paginas de canciones">
+      <motion.button
+        type="button"
+        whileTap={reduceMotion ? undefined : { scale: 0.9 }}
+        onClick={() => onChange(page - 1)}
+        disabled={page === 1}
+        title="Pagina anterior"
+        aria-label="Pagina anterior"
+      >
+        <ChevronLeft size={20} />
+      </motion.button>
+      <span><strong>{page}</strong> de {totalPages}</span>
+      <motion.button
+        type="button"
+        whileTap={reduceMotion ? undefined : { scale: 0.9 }}
+        onClick={() => onChange(page + 1)}
+        disabled={page === totalPages}
+        title="Pagina siguiente"
+        aria-label="Pagina siguiente"
+      >
+        <ChevronRight size={20} />
+      </motion.button>
+    </nav>
   );
 }
 
@@ -995,10 +1073,11 @@ function loadImage(source) {
 
 function Sheet({ title, onClose, reduceMotion, children }) {
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const scrollContainer = document.querySelector(".app-shell");
+    const previousOverflow = scrollContainer?.style.overflowY || "";
+    if (scrollContainer) scrollContainer.style.overflowY = "hidden";
     return () => {
-      document.body.style.overflow = previousOverflow;
+      if (scrollContainer) scrollContainer.style.overflowY = previousOverflow;
     };
   }, []);
 
