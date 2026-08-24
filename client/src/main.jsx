@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Check, ChevronDown, ClipboardPaste, Fingerprint, ImagePlus, LogOut, MoreHorizontal, Minus, Music2, Plus, RotateCcw, Search, Star, Trash2, Upload, X } from "lucide-react";
+import { Check, ChevronDown, ClipboardPaste, ImagePlus, MoreHorizontal, Minus, Music2, Plus, RotateCcw, Search, Star, Trash2, Upload, X } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import {
   createSong,
@@ -10,10 +10,10 @@ import {
   getWishlist,
   migrateLocalData,
   reorderSongs,
+  subscribeToCloudChanges,
   updateProfile,
   updateSong
 } from "./api/repertorio.js";
-import { getCurrentUser, observeAuth, registerPasskey, signIn, signInWithPasskey, signOut, signUp } from "./api/auth.js";
 import { searchSongs } from "./api/songSearch.js";
 import { filterSongs } from "./lib/filters.js";
 import "./theme.css";
@@ -65,9 +65,6 @@ const landingColumns = [
 function App() {
   const reduceMotion = useReducedMotion();
   const [showLanding, setShowLanding] = useState(true);
-  const [showAuth, setShowAuth] = useState(false);
-  const [authReady, setAuthReady] = useState(false);
-  const [user, setUser] = useState(null);
   const [songs, setSongs] = useState([]);
   const [wishlist, setWishlist] = useState([]);
   const [orderedIds, setOrderedIds] = useState([]);
@@ -81,49 +78,16 @@ function App() {
   const [sheet, setSheet] = useState(null);
   const [celebration, setCelebration] = useState(null);
   const [error, setError] = useState("");
-  const [passkeyNotice, setPasskeyNotice] = useState("");
-  const [passkeyLoading, setPasskeyLoading] = useState(false);
   const reorderTimer = useRef(null);
 
   useEffect(() => {
     let active = true;
-
-    async function loadAccount(currentUser) {
-      if (!currentUser) return;
-      try {
-        await migrateLocalData(currentUser.id);
-        if (active) await refresh();
-      } catch (err) {
-        if (active) setError(err.message);
-      }
-    }
-
-    getCurrentUser()
-      .then((currentUser) => {
-        if (!active) return;
-        setUser(currentUser);
-        setAuthReady(true);
-        return loadAccount(currentUser);
-      })
+    migrateLocalData()
+      .then(() => active && refresh())
       .catch((err) => {
-        if (!active) return;
-        setError(err.message);
-        setAuthReady(true);
+        if (active) setError(err.message);
       });
-
-    const stopObserving = observeAuth((currentUser) => {
-      if (!active) return;
-      setUser(currentUser);
-      setAuthReady(true);
-      if (currentUser) {
-        setShowAuth(false);
-        loadAccount(currentUser);
-      } else {
-        setSongs([]);
-        setWishlist([]);
-        setOrderedIds([]);
-      }
-    });
+    const stopObserving = subscribeToCloudChanges(() => active && refresh());
 
     return () => {
       active = false;
@@ -132,7 +96,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!user) return undefined;
     const refreshWhenActive = () => {
       if (document.visibilityState === "visible") refresh();
     };
@@ -142,7 +105,7 @@ function App() {
       window.removeEventListener("focus", refreshWhenActive);
       document.removeEventListener("visibilitychange", refreshWhenActive);
     };
-  }, [user]);
+  }, []);
 
   async function refresh() {
     setError("");
@@ -222,29 +185,6 @@ function App() {
     setProfileImage(saved.imagen || "");
   }
 
-  async function leaveAccount() {
-    try {
-      await signOut();
-      setShowLanding(true);
-      setShowAuth(false);
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function enablePasskey() {
-    setPasskeyLoading(true);
-    setPasskeyNotice("");
-    try {
-      await registerPasskey();
-      setPasskeyNotice("Huella o PIN activados en este dispositivo.");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setPasskeyLoading(false);
-    }
-  }
-
   function handleReorder(nextItems) {
     if (hasActiveFilters) return;
     const movableIds = new Set(tabItems.map((item) => item.id));
@@ -277,15 +217,7 @@ function App() {
         <header className="topbar">
           <ProfileImageButton value={profileImage} onChange={saveProfileImage} />
           <h1>Mi Repertorio</h1>
-          <button className="account-button passkey-button" type="button" onClick={enablePasskey} disabled={passkeyLoading} title="Activar huella o PIN" aria-label="Activar huella o PIN">
-            <Fingerprint size={19} />
-          </button>
-          <button className="account-button" type="button" onClick={leaveAccount} title="Cerrar sesion" aria-label="Cerrar sesion">
-            <LogOut size={18} />
-          </button>
         </header>
-
-        {passkeyNotice ? <p className="passkey-notice">{passkeyNotice}</p> : null}
 
         <section className="hero-strip">
           <div><span>{allItems.filter((item) => item.favorito).length}</span><p>favoritos</p></div>
@@ -353,20 +285,7 @@ function App() {
         {showLanding ? (
           <LandingScreen
             key="landing-screen"
-            onEnter={() => {
-              if (!authReady) return;
-              setShowLanding(false);
-              setShowAuth(!user);
-            }}
-            reduceMotion={reduceMotion}
-          />
-        ) : null}
-        {showAuth && !user ? (
-          <AuthScreen
-            key="auth-screen"
-            onSignIn={signIn}
-            onSignUp={signUp}
-            onPasskey={signInWithPasskey}
+            onEnter={() => setShowLanding(false)}
             reduceMotion={reduceMotion}
           />
         ) : null}
@@ -387,123 +306,6 @@ function App() {
         ) : null}
       </AnimatePresence>
     </main>
-  );
-}
-
-function AuthScreen({ onSignIn, onSignUp, onPasskey, reduceMotion }) {
-  const [mode, setMode] = useState("signin");
-  const [showPassword, setShowPassword] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [authError, setAuthError] = useState("");
-
-  async function submit(event) {
-    event.preventDefault();
-    setLoading(true);
-    setMessage("");
-    setAuthError("");
-    try {
-      if (mode === "signup") {
-        const result = await onSignUp(email.trim(), password);
-        if (result.needsConfirmation) {
-          setMessage("Revisa tu correo y confirma la cuenta. Después vuelve aquí y pulsa Entrar.");
-          setMode("signin");
-        }
-      } else {
-        await onSignIn(email.trim(), password);
-      }
-    } catch (err) {
-      setAuthError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function usePasskey() {
-    setLoading(true);
-    setMessage("");
-    setAuthError("");
-    try {
-      await onPasskey();
-    } catch (err) {
-      setAuthError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <motion.section
-      className="auth-screen"
-      initial={reduceMotion ? { opacity: 1 } : { opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-    >
-      <motion.div
-        className="auth-panel"
-        initial={reduceMotion ? false : { opacity: 0, y: 18 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.36, ease: "easeOut" }}
-      >
-        <span className="auth-mark"><Music2 size={30} /></span>
-        <p className="auth-kicker">Tu repertorio, en todas partes</p>
-        <h2>Continuar</h2>
-        <p className="auth-intro">Entra una vez y tus canciones se mantendrán sincronizadas entre el celular y la computadora.</p>
-
-        <motion.button type="button" className="passkey-auth-button" whileTap={reduceMotion ? undefined : press} onClick={usePasskey} disabled={loading}>
-          <Fingerprint size={24} />
-          {loading ? "Comprobando..." : "Entrar con huella o PIN"}
-        </motion.button>
-
-        <p className="auth-helper">Usa Windows Hello en la computadora o la huella de tu celular.</p>
-        {authError ? <p className="auth-error auth-feedback">{authError}</p> : null}
-        {message ? <p className="auth-message auth-feedback">{message}</p> : null}
-
-        <div className="auth-divider"><span>o</span></div>
-        <button type="button" className="auth-email-toggle" onClick={() => setShowPassword((current) => !current)}>
-          {showPassword ? "Ocultar acceso alternativo" : "Primera vez o usar contraseña"}
-        </button>
-
-        <AnimatePresence initial={false}>
-          {showPassword ? (
-            <motion.div
-              className="auth-email-area"
-              initial={reduceMotion ? false : { opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-            >
-              <form className="auth-form" onSubmit={submit}>
-                <label>
-                  <span>Correo</span>
-                  <input type="email" inputMode="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-                </label>
-                <label>
-                  <span>Contraseña</span>
-                  <input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength="6" value={password} onChange={(event) => setPassword(event.target.value)} required />
-                </label>
-                <motion.button className="auth-submit" whileTap={reduceMotion ? undefined : press} disabled={loading}>
-                  {loading ? "Conectando..." : mode === "signup" ? "Crear cuenta" : "Entrar"}
-                </motion.button>
-              </form>
-
-              <button
-                type="button"
-                className="auth-mode"
-                onClick={() => {
-                  setMode((current) => current === "signin" ? "signup" : "signin");
-                  setAuthError("");
-                  setMessage("");
-                }}
-              >
-                {mode === "signup" ? "Ya tengo cuenta" : "Crear una cuenta con correo"}
-              </button>
-            </motion.div>
-          ) : null}
-        </AnimatePresence>
-      </motion.div>
-    </motion.section>
   );
 }
 

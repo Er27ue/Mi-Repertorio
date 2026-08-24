@@ -4,11 +4,13 @@ Libreta musical personal para organizar canciones dominadas, favoritas y por apr
 
 ## Datos y sincronizacion
 
-- Supabase Auth identifica al usuario por correo y contrasena.
-- Supabase Postgres guarda canciones y la foto de perfil.
-- Las politicas RLS limitan cada fila a su propietario.
-- Al iniciar sesion por primera vez, los datos anteriores de IndexedDB se importan automaticamente.
+- La app entra directamente, sin ningún inicio de sesión.
+- Supabase Postgres guarda un unico repertorio compartido y la foto de perfil.
+- Computadora y celular leen y escriben el mismo repertorio, con actualizacion en tiempo real.
+- Al abrir esta version por primera vez, los datos anteriores de IndexedDB se importan automaticamente.
 - El backend Express + SQLite se conserva como referencia, pero la app publicada no depende de la computadora.
+
+Como no existe inicio de sesion, cualquier persona que obtenga la URL publicada puede modificar este repertorio personal.
 
 ## Desarrollo
 

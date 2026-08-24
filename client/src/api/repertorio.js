@@ -6,13 +6,14 @@ const SONGS_STORE = "canciones";
 const SETTINGS_STORE = "ajustes";
 const LEGACY_STORE = "mi-repertorio-phone-v1";
 const DEVICE_KEY = "mi-repertorio-device-id";
+const SHARED_USER_ID = "2f0900d7-e8ed-419c-a03e-6812dd54e13d";
 
 let databasePromise;
 let writeQueue = Promise.resolve();
 
-export async function migrateLocalData(userId) {
+export async function migrateLocalData() {
   const db = await openDatabase();
-  const migrationKey = `supabaseMigrated:${userId}`;
+  const migrationKey = "supabaseMigrated:shared-v1";
   const migrated = await getLocalSetting(db, migrationKey);
   if (migrated?.value) return { imported: 0 };
 
@@ -28,7 +29,7 @@ export async function migrateLocalData(userId) {
   if (missingSongs.length) {
     const rows = missingSongs.map((song, index) => ({
       ...toDatabaseSong(normalize(song, song)),
-      user_id: userId,
+      user_id: SHARED_USER_ID,
       origen_local_id: `${deviceId}:${song.id ?? index}`,
     }));
     const { error } = await supabase.from("canciones").upsert(rows, {
@@ -42,6 +43,7 @@ export async function migrateLocalData(userId) {
     const { data: profile } = await supabase
       .from("ajustes")
       .select("valor")
+      .eq("user_id", SHARED_USER_ID)
       .eq("clave", "profileImage")
       .maybeSingle();
     if (!profile?.valor) await updateProfile(localProfile.value);
@@ -57,12 +59,11 @@ export async function getSongs() {
 
 export async function createSong(payload) {
   return enqueueWrite(async () => {
-    const user = await requireUser();
     const order = await nextCloudOrder();
     const song = normalize(payload, { orden: order, fecha_creado: new Date().toISOString() });
     const { data, error } = await supabase
       .from("canciones")
-      .insert({ ...toDatabaseSong(song), user_id: user.id })
+      .insert({ ...toDatabaseSong(song), user_id: SHARED_USER_ID })
       .select()
       .single();
     if (error) throw dataError(error);
@@ -72,13 +73,14 @@ export async function createSong(payload) {
 
 export async function updateSong(id, payload) {
   return enqueueWrite(async () => {
-    const { data: current, error: readError } = await supabase.from("canciones").select("*").eq("id", id).single();
+    const { data: current, error: readError } = await supabase.from("canciones").select("*").eq("user_id", SHARED_USER_ID).eq("id", id).single();
     if (readError) throw dataError(readError);
     const existing = fromDatabaseSong(current);
     const song = normalize({ ...existing, ...payload }, existing);
     const { data, error } = await supabase
       .from("canciones")
       .update({ ...toDatabaseSong(song), updated_at: new Date().toISOString() })
+      .eq("user_id", SHARED_USER_ID)
       .eq("id", id)
       .select()
       .single();
@@ -89,7 +91,7 @@ export async function updateSong(id, payload) {
 
 export async function deleteSong(id) {
   return enqueueWrite(async () => {
-    const { error } = await supabase.from("canciones").delete().eq("id", id);
+    const { error } = await supabase.from("canciones").delete().eq("user_id", SHARED_USER_ID).eq("id", id);
     if (error) throw dataError(error);
     return null;
   });
@@ -98,7 +100,7 @@ export async function deleteSong(id) {
 export async function reorderSongs(ids) {
   return enqueueWrite(async () => {
     const results = await Promise.all(ids.map((id, orden) => (
-      supabase.from("canciones").update({ orden, updated_at: new Date().toISOString() }).eq("id", id)
+      supabase.from("canciones").update({ orden, updated_at: new Date().toISOString() }).eq("user_id", SHARED_USER_ID).eq("id", id)
     )));
     const failed = results.find((result) => result.error);
     if (failed?.error) throw dataError(failed.error);
@@ -111,17 +113,16 @@ export async function getWishlist() {
 }
 
 export async function getProfile() {
-  const { data, error } = await supabase.from("ajustes").select("valor").eq("clave", "profileImage").maybeSingle();
+  const { data, error } = await supabase.from("ajustes").select("valor").eq("user_id", SHARED_USER_ID).eq("clave", "profileImage").maybeSingle();
   if (error) throw dataError(error);
   return { imagen: String(data?.valor || "") };
 }
 
 export async function updateProfile(imagen) {
   return enqueueWrite(async () => {
-    const user = await requireUser();
     const value = String(imagen || "");
     const { error } = await supabase.from("ajustes").upsert({
-      user_id: user.id,
+      user_id: SHARED_USER_ID,
       clave: "profileImage",
       valor: value,
       updated_at: new Date().toISOString(),
@@ -131,10 +132,20 @@ export async function updateProfile(imagen) {
   });
 }
 
+export function subscribeToCloudChanges(callback) {
+  const channel = supabase
+    .channel("mi-repertorio-shared")
+    .on("postgres_changes", { event: "*", schema: "public", table: "canciones" }, callback)
+    .on("postgres_changes", { event: "*", schema: "public", table: "ajustes" }, callback)
+    .subscribe();
+  return () => { void supabase.removeChannel(channel); };
+}
+
 async function fetchCloudSongs() {
   const { data, error } = await supabase
     .from("canciones")
     .select("*")
+    .eq("user_id", SHARED_USER_ID)
     .order("orden", { ascending: true })
     .order("fecha_creado", { ascending: true });
   if (error) throw dataError(error);
@@ -142,15 +153,9 @@ async function fetchCloudSongs() {
 }
 
 async function nextCloudOrder() {
-  const { data, error } = await supabase.from("canciones").select("orden").order("orden", { ascending: false }).limit(1).maybeSingle();
+  const { data, error } = await supabase.from("canciones").select("orden").eq("user_id", SHARED_USER_ID).order("orden", { ascending: false }).limit(1).maybeSingle();
   if (error) throw dataError(error);
   return Number(data?.orden ?? -1) + 1;
-}
-
-async function requireUser() {
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data.user) throw new Error("Inicia sesion para sincronizar tu repertorio.");
-  return data.user;
 }
 
 function enqueueWrite(operation) {

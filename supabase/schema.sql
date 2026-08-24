@@ -1,5 +1,5 @@
 -- Esquema de referencia de Mi Repertorio.
--- La base remota usa estas tablas con RLS y politicas por auth.uid().
+-- La base remota usa un unico repertorio compartido por computadora y celular.
 
 create table public.canciones (
   id uuid primary key default gen_random_uuid(),
@@ -38,25 +38,25 @@ create table public.ajustes (
 alter table public.canciones enable row level security;
 alter table public.ajustes enable row level security;
 
-grant select, insert, update, delete on public.canciones to authenticated;
-grant select, insert, update, delete on public.ajustes to authenticated;
-revoke all on public.canciones from anon;
-revoke all on public.ajustes from anon;
+grant select, insert, update, delete on public.canciones to anon, authenticated;
+grant select, insert, update, delete on public.ajustes to anon, authenticated;
 
-create policy "Usuarios leen sus canciones" on public.canciones for select to authenticated
-using ((select auth.uid()) = user_id);
-create policy "Usuarios crean sus canciones" on public.canciones for insert to authenticated
-with check ((select auth.uid()) = user_id);
-create policy "Usuarios actualizan sus canciones" on public.canciones for update to authenticated
-using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
-create policy "Usuarios borran sus canciones" on public.canciones for delete to authenticated
-using ((select auth.uid()) = user_id);
+create policy "Repertorio compartido lee canciones" on public.canciones for select to anon, authenticated
+using (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid);
+create policy "Repertorio compartido crea canciones" on public.canciones for insert to anon, authenticated
+with check (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid);
+create policy "Repertorio compartido actualiza canciones" on public.canciones for update to anon, authenticated
+using (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid)
+with check (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid);
+create policy "Repertorio compartido borra canciones" on public.canciones for delete to anon, authenticated
+using (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid);
 
-create policy "Usuarios leen sus ajustes" on public.ajustes for select to authenticated
-using ((select auth.uid()) = user_id);
-create policy "Usuarios crean sus ajustes" on public.ajustes for insert to authenticated
-with check ((select auth.uid()) = user_id);
-create policy "Usuarios actualizan sus ajustes" on public.ajustes for update to authenticated
-using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
-create policy "Usuarios borran sus ajustes" on public.ajustes for delete to authenticated
-using ((select auth.uid()) = user_id);
+create policy "Repertorio compartido lee ajustes" on public.ajustes for select to anon, authenticated
+using (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid);
+create policy "Repertorio compartido crea ajustes" on public.ajustes for insert to anon, authenticated
+with check (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid);
+create policy "Repertorio compartido actualiza ajustes" on public.ajustes for update to anon, authenticated
+using (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid)
+with check (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid);
+create policy "Repertorio compartido borra ajustes" on public.ajustes for delete to anon, authenticated
+using (user_id = '2f0900d7-e8ed-419c-a03e-6812dd54e13d'::uuid);
