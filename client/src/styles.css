@@ -57,8 +57,7 @@ select:focus-visible {
 .app-shell {
   width: 100%;
   height: 100dvh;
-  display: flex;
-  justify-content: center;
+  display: block;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
@@ -70,6 +69,7 @@ select:focus-visible {
 .phone-frame {
   width: min(100%, 520px);
   min-height: calc(100vh - 36px);
+  margin: 0 auto;
   position: relative;
   overflow: hidden;
   border: var(--border-subtle);
